@@ -1,0 +1,93 @@
+var boundary: Table user/Golden/boundary
+
+Map.addLayer(boundary);
+Map.centerObject(boundary);
+
+var start = ee.Date('2015-10-01'); //Dates of interest
+var finish = ee.Date('2016-07-01'); 
+var sentinel = ee.ImageCollection('COPERNICUS/S2')
+.filterBounds(boundary)
+.filterDate(start, finish)
+.filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 5)); 
+//to get imagery with cloud coverage below 5%
+print("sentinel image collection:", sentinel);
+
+//compute NDVI for each image
+var NDVI = sentinel.map(
+    function(img) {
+        return img.normalizedDifference(['B8','B4'])
+              .rename('NDVI')
+              .copyProperties(img, ['system:time_start']);
+    });
+print("NDVI image collection:", NDVI);
+
+var tempTimeSeries = ui.Chart.image.seriesByRegion(
+    NDVI, boundary, ee.Reducer.mean(), 'NDVI', 10, 'system:time_start', 'label')
+        .setChartType('ScatterChart')
+        .setOptions({
+          title: 'Median value of the NDVI image over time',
+          vAxis: {title: 'median NDVI value'},
+          lineWidth: 1,
+          pointSize: 4,
+          series: {
+            0: {color: 'FF0000'}, // urban 
+            1: {color: '00FF00'}, // forest 
+            2: {color: '0000FF'}  // desert
+}});
+print(tempTimeSeries); // Display.
+
+var reducers = ee.Reducer.mean().combine({
+  reducer2: ee.Reducer.stdDev(),
+  sharedInputs: true
+}); // plot two reducers in time series together 
+print(ui.Chart.image.series(NDVI, boundary, reducers, 10).setChartType('ScatterChart')
+.setOptions({title: 'Mean and Standard Deviation of NDVI Image Over Time', vAxis: {title: 'NDVI value'}, lineWidth: 1, pointSize: 2,}));
+
+// now compute median for each NDVI image
+var Dict = NDVI.map(
+  function(img){
+    return img.set('NDVI', 
+    img.reduceRegion({
+      reducer: ee.Reducer.median(),
+      geometry: boundary,
+      scale: 10})
+    );
+    }); 
+print('convert image collection to array:',Dict.aggregate_array('NDVI'));
+
+// or 
+var Dict = NDVI.map(function(img) {
+  var median = img.reduceRegion({reducer: ee.Reducer.median(), geometry:boundary, scale: 10});
+  return img.set({median: median.get('NDVI')});
+});
+print(Dict); 
+
+var best = ee.Image(Dict.sort('median', true).first()); 
+print('Index: best image with the lowest NDVI median:', best.get('system:index'));
+
+var bestImage = sentinel.filter(ee.Filter.equals('system:index', best.get('system:index')))
+.select(['B2', 'B3', 'B4', 'B8']); 
+print('best image with 4 bands', bestImage);
+
+// validation 
+var listOfImages = sentinel.toList(sentinel.size());
+var firstImage = listOfImages.get(1); //choose lowest NDVI median
+//var lastImage = listOfImages.get(listOfImages.length().subtract(1))
+print('first image:', firstImage);
+
+var firstImage_4bands = ee.Image(firstImage).select(['B2', 'B3', 'B4', 'B8']);
+print('first image with 4 bands:', firstImage_4bands);
+
+var ROI = firstImage_4bands.clip(boundary.geometry().bounds());
+
+var ROI_ndvi = ROI.normalizedDifference(['B8','B4']).rename('NDVI'); //NDVI calculation
+print('ROI NDVI image:', ROI_ndvi);
+//Map.addLayer(ROI_ndvi);
+//Map.centerObject(ROI_ndvi);
+
+// Compute the mean NDVI in the polygon.
+var median_ndvi = ROI_ndvi.reduceRegion({
+       reducer: ee.Reducer.median(),
+        geometry: boundary,
+        scale: 10}); 
+print("median NDVI value within ROI:",median_ndvi);

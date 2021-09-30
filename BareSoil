@@ -1,0 +1,53 @@
+var table: Table users/Golden/McCarville_poly
+// Set up a new folder under "Assets" by clicking on "NEW". 
+// Upload boundary files to the folder by clicking on "table upload"
+// After it is done then import the file to your script. 
+// By default, it will be called "table".
+
+var start = ee.Date('2017-04-01'); 
+var finish = ee.Date('2018-11-01');
+// Select a period of interest 
+var sentinel = ee.ImageCollection('COPERNICUS/S2')
+.filterBounds(table)
+.filterDate(start, finish)
+.filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 5)); 
+//Filter out images with cloud coverage below 5%
+print("Filtered raw images:",sentinel);
+
+var NDVI = sentinel.map(
+    function(img) {
+        return img.normalizedDifference(['B8','B4'])
+              .rename('NDVI')
+              .copyProperties(img, ['system:time_start']);
+    }); 
+//compute NDVI for each image
+print("Computed NDVI images:", NDVI);
+
+var Dict = NDVI.map(function(img) {
+  var median = img.reduceRegion(
+    {reducer: ee.Reducer.median(), geometry:table, scale: 10}
+    );
+  return img.set({NDVI_median: median.get('NDVI')});
+}); 
+//compute the median value for each NDVI image
+print("Calculated NDVI_median:", Dict);
+
+var best = ee.Image(Dict.sort('NDVI_median', true).first()); 
+print('Bare Soil Image Index:', best.get('system:index'));
+// print out the image index has lowest median NDVI value
+
+var bestImage = sentinel.filter(ee.Filter.equals('system:index', best.get('system:index'))).select(['B2', 'B3', 'B4', 'B8']).toList(sentinel.size()).get(0); 
+// select that image with visible bands and NIR band
+print(bestImage);
+
+var bestImage_ref = ee.Image(bestImage).divide(10000);
+print('Best soil image reflectance', bestImage_ref);
+
+Export.image.toDrive({
+  image: bestImage_ref,
+  description: 'BareSoil',
+  scale: 10,
+  region: table.geometry().bounds(),
+  fileFormat: 'GeoTIFF'
+}); 
+// export this image to Google Drive and download
